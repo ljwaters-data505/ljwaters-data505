@@ -1,4 +1,4 @@
-## Hi there 👋
+## DATA 505 Spring 2025 Class Repository
 
 <!--
 **ljwaters-data505/ljwaters-data505** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
