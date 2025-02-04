@@ -1,0 +1,97 @@
+---
+title: "Wine Features"
+author: "Landon Waters"
+date: "2025-02-03"
+output: html_document
+---
+
+**Abstract:**
+
+This is a technical blog post of **both** an HTML file *and* [.qmd file](src/wine_features.qmd) hosted on GitHub pages.
+
+# Setup
+
+**Step Up Code:**
+```{r message = FALSE}
+library(tidyverse)
+library(caret)
+library(fastDummies)
+wine <- readRDS(gzcon(url("https://github.com/cd-public/D505/raw/master/dat/wine.rds")))
+```
+
+**Explanataion:**
+
+> <span style="color:red;font-weight:bold">TODO</span>: *The three library functions load in downloaded R libraries into this session. The function gzcon reads in the compressed data set from the github URL, and readRDS reads the data object in R, assigning it to "wine".*
+
+# Feature Engineering
+
+We begin by engineering an number of features.
+
+1. Create a total of 10 features (including points). 
+2. Remove all rows with a missing value. 
+3. Ensure only log(price) and engineering features are the only columns that remain in the `wino` dataframe.
+
+```{r}
+
+# for feature engineering
+# top_country = names(sort(table(wine$country), decreasing = TRUE))[1] # na.omit -> only us
+med_year = median(wine$year, na.rm = TRUE)
+taster_freq = table(wine$taster_name)
+winery_freq = table(wine$winery)
+
+wino <- wine %>% 
+  mutate(lprice=log(price),
+         # engineer features here
+         # top_country = ifelse(country == top_country, 1, 0),  # popular country boolean
+         desc_length = nchar(description),  # how long the wine description is
+         old_wine = ifelse(year < med_year, 1, 0),  # boolean for older wine
+         taster_pop = as.numeric(taster_freq[taster_name]),  # wine taster popularity
+         winery_pop = as.numeric(winery_freq[winery])  # winery popularity
+         ) %>%
+  na.omit() %>%
+  select(
+    lprice, points, variety, price, province, designation, 
+    desc_length, old_wine, taster_pop, winery_pop
+    )
+
+```
+
+# Caret
+
+We now use a train/test split to evaluate the features.
+
+1. Use the Caret library to partition the wino dataframe into an 80/20 split. 
+2. Run a linear regression with V Fold Cross Validation. 
+3. Report RMSE on the test partition of the data.
+
+```{r}
+# TODO: hint: Check the slides.
+
+wine_index <- createDataPartition(wino$lprice, p = 0.8, list = FALSE)
+wino_tr <- wino[wine_index, ]
+wino_te <- wino[-wine_index, ]
+
+set.seed(123)  # For reproducibility
+wino_sample <- wino_tr[sample(nrow(wino_tr), 5000), ]
+
+m1 <- train(lprice ~ .,
+  data = wino_sample,
+  method = "lm",
+  trControl = trainControl(method = "repeatedcv", number = 5, repeats = 3)
+)
+
+print(m1$resample)
+postResample(pred = predict(m1, wino_te), obs = wino_te$lprice)
+
+```
+
+# Variable selection
+
+We now graph the importance of your 10 features.
+
+```{r}
+# TODO: hint: Check the slides.
+
+plot(varImp(m1, scale = TRUE))
+
+```
