@@ -97,7 +97,7 @@ df <- wine %>%
   group_by(is_ny) %>%
   mutate(freq = n / sum(n)) %>%  # normalize frequencies (most only occur once)
   ungroup() %>%
-  spread(is_ny, freq, fill = 0) %>%  # columns for NY vs Other 
+  pivot_wider(names_from = is_ny, values_from = freq, values_fill = list(freq = 0)) %>% 
   mutate(prob_diff = NY - Other) %>%  # probability difference b/w word occurrences
   arrange(desc(prob_diff))
 
