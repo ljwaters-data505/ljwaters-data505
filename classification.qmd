@@ -1,0 +1,204 @@
+---
+title: "Classification"
+author: "Landon Waters"
+date: "02/24/2025"
+
+format: 
+  html:
+    theme: spacelab  
+    mainfont: verdana
+    highlight-style: github
+    title-block-banner: true
+    embed-resources: true
+---
+
+**Abstract:**
+
+This is a technical blog post of **both** an HTML file *and* [.qmd file](https://raw.githubusercontent.com/cd-public/D505/refs/heads/master/hws/src/classify.qmd) hosted on GitHub pages.
+
+# 1. Setup
+
+**Set Up Code:**
+
+```{r}
+sh <- suppressPackageStartupMessages
+sh(library(tidyverse))
+sh(library(caret))
+sh(library(tidytext))
+sh(library(SnowballC))
+sh(library(pROC))
+sh(library(glmnet))
+data(stop_words)
+wine <- readRDS(gzcon(url("https://github.com/cd-public/D505/raw/master/dat/pinot.rds")))
+```
+
+# 2. Logistic Concepts
+
+Why do we call it Logistic Regression even though we are using the technique for classification?
+
+> <span style="color:red;font-weight:bold">TODO</span>: *It is called a regression because we are still applying a variation of the regression formula to the data. What makes it a classification is the fact that we are trying to predict a discrete, binary output using the logistic formula. When we apply the logistic function to the predictors it transforms them into probabilities between 1 and 0. For example, if the value is closer to 1 then 0, then it classifies it as a 1.*
+
+# 3. Modeling
+
+**Useful functions:**
+
+```{r}
+desc_to_words <- function(df, omits) { 
+  df %>%
+    unnest_tokens(word, description) %>%
+    anti_join(stop_words) %>% # get rid of stop words
+    filter(!(word %in% omits))
+}
+
+words_to_stems <- function(df) { 
+  df %>%
+    mutate(word = wordStem(word))
+}
+
+filter_by_count <- function(df, j) { 
+  df %>%
+    count(id, word) %>% 
+    group_by(id) %>% mutate(exists = (n>0)) %>% ungroup %>% 
+    group_by(word) %>% 
+    mutate(total = sum(n)) %>% 
+    filter(total > j)
+}
+
+pivoter <- function(words, df) {
+  words %>%
+    pivot_wider(id_cols = id, names_from = word, values_from = exists, values_fill = list(exists=0)) %>% 
+    right_join(select(df,id,province)) %>% 
+    drop_na() %>% 
+    select(-id)
+}
+
+wine_words <- function(df, j, stem) { 
+
+  words <- desc_to_words(df, c("wine","pinot","vineyard"))
+  
+  if (stem) {
+    words <- words_to_stems(words)
+  }
+  
+  words <- filter_by_count(words, j)
+
+  pivoter(words, df)
+}
+
+get_odds <- function(fit) {
+  as.data.frame(t(exp(coef(fit$finalModel))))   %>%
+  rownames_to_column(var = "name") %>%
+  pivot_longer(-name, names_to = "class", values_to = "odds") %>%
+  arrange(desc(odds)) %>%
+  head()
+}
+
+get_fit <- function(df, control) {
+  train(marlborough ~ .,
+        data = df, 
+        trControl = control,
+        method = "glm",
+        family = "binomial")
+}
+
+get_matrix <- function(fit, df) {
+  pred <- factor(predict(fit, newdata = df))
+  confusionMatrix(pred,factor(df$marlborough))
+}
+```
+
+We train a logistic regression algorithm to classify a whether a wine comes from Marlborough using:
+
+1. An 80-20 train-test split.
+2. Three features engineered from the description
+3. 5-fold cross validation.
+
+We report Kappa after using the model to predict provinces in the holdout sample.
+
+To start, we will create a model with the "kitchen sink" of features that includes a binary feature for any stem that occurs more than 1000 times.
+
+```{r message=FALSE, warning=FALSE}
+# TODO
+set.seed(505)
+
+# Token-ize description, remove stop words, reduce words to stems, filter to 
+# words occurring more than 1000 times, pivot/create binary features for 
+# logistic regression
+wino <- suppressMessages(wine_words(wine, 1000, T))
+
+wino <- wino %>% 
+  mutate(marlborough = factor(province=="Marlborough")) %>%
+  select(-province)
+
+# 80-20 train-test split
+wine_index <- createDataPartition(wino$marlborough, p = 0.80, list = FALSE)
+train <- wino[ wine_index, ]
+test <- wino[-wine_index, ]
+
+# 5-fold cross validation using logistic regression algorithm
+control = trainControl(method = "cv", number = 5)
+
+fit <- get_fit(train, control)
+
+# Change the threshold to 0.4 due to high False Negative rate
+prob <- predict(fit, newdata = test, type = "prob")[,2] # take positive predictions
+pred <- factor(ifelse(prob > 0.4, "TRUE", "FALSE"), levels = c("FALSE", "TRUE"))
+
+confusionMatrix(pred, test$marlborough, positive = "TRUE")$overall["Kappa"]
+```
+
+From the last model, let's see what the most prevalent stems were.
+
+```{r}
+get_odds(fit)
+```
+
+Using the most common stems, we can create our 3 engineered features and make another model.
+
+```{r}
+set.seed(505)
+
+# features do not seem very distinct, small sample of wines
+wino2<-wino%>%
+  select(drink, bodi, finish, marlborough)
+
+wine_index2 <- createDataPartition(wino2$marlborough, p = 0.80, list = FALSE)
+train2 <- wino2[ wine_index2, ]
+test2 <- wino2[-wine_index2, ]
+
+control2 = trainControl(method = "cv", number = 5)
+fit2 <- get_fit(train2, control2)
+
+prob2 <- predict(fit2, newdata = test2, type = "prob")[,2]
+pred2 <- factor(ifelse(prob2 > 0.4, "TRUE", "FALSE"), levels = levels(test2$marlborough))
+# interesting, slightly changing the threshold has no effect on the kappa on this simpler model
+
+# including threshold change
+# confusionMatrix(pred2, test2$marlborough, positive = "TRUE")$overall["Kappa"] 
+
+# excluding threshold change
+get_matrix(fit2, test2)$overall["Kappa"]
+```
+
+The new model with much fewer features has a significantly smaller Kappa value. This most likely indicates that the first model was heavily overfitting the data set.
+
+# 4. Binary vs Other Classification
+
+What is the difference between determining some form of classification through logistic regression versus methods like $K$-NN and Naive Bayes which performed classifications.
+
+> <span style="color:red;font-weight:bold">TODO</span>: *The main difference is that $K$-NN and Naive Bayes support multi-class classification, while logistic regression is designed for binary classification primarily.*
+
+# 5. ROC Curves
+
+We can display an ROC for the model to explain your model's quality.
+
+```{r message=FALSE, warning=FALSE}
+# You can find a tutorial on ROC curves here:
+# https://towardsdatascience.com/understanding-the-roc-curve-and-auc-dd4f9a192ecb/
+
+myRoc <- roc(test2$marlborough, prob2)
+plot(myRoc)
+auc(myRoc)
+```
+
+> <span style="color:red;font-weight:bold">TODO</span>: *The curve is relatively close to the top left corner which indicates that the model is doing a solid job of distinguishing between Marlborough and non-Marlborough wines. The AUC value of 0.7924 suggests decent predictive performance, well above the 0.5 threshold for random guessing. This is another sign that the model is relatively good at predicting the wines correctly. Despite the limited sample size of Marlborough wines, the model demonstrates solid predictive ability.*
